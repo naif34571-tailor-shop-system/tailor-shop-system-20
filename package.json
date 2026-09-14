@@ -14,7 +14,8 @@
     "lucide-react": "^0.383.0",
     "recharts": "^2.12.7",
     "jsbarcode": "^3.11.6",
-    "html5-qrcode": "^2.3.8"
+    "html5-qrcode": "^2.3.8",
+    "@supabase/supabase-js": "^2.45.4"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
