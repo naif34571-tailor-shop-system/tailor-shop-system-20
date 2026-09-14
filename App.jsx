@@ -69,7 +69,8 @@ const seedData = () => ({
     { id: "network", name: "الشبكة", type: "شبكة", balance: 0 },
   ],
   vouchers: [], journalEntries: [], appointments: [],
-  counters: { customer: 1000, order: 1000 },
+  counters: { customer: 1000, order: 1000, group: 1000 },
+  orderGroups: [],
   shopSettings: { name: "مشغل الخياطة الرجالية", legalName: "", logo: "", phone: "", whatsapp: "", address: "", city: "", crNumber: "", taxNumber: "", website: "", bankName: "", iban: "", invoiceFooter: "", appTheme: "classic", readyMessageTemplate: "مرحبًا {name}، طلبك رقم #{orderNo} جاهز للاستلام من {shop}. بانتظارك! 🙏" },
   users: [{ id: "u1", name: "مدير النظام", username: "admin", password: "admin123", phone: "", role: "مدير عام", branches: ["b1"], permissions: defaultPermissions("مدير عام") }],
   invoiceTheme: "classic",
@@ -489,7 +490,7 @@ function emptyOrder(data) {
     measurements, designs, price: "", deposit: "", deliveryDate: "", stage: data.orderStages[0],
     shelf: "", column: "", notes: "", fabricType: "", fabricUsed: "", paymentMethod: "نقدي",
     assignedTailorId: "", discount: "", couponCode: "", alterationsRemaining: 2, alterationLog: [],
-    embroideryType: "بدون", embroideryNotes: "", stageAssignments: {},
+    embroideryType: "بدون", embroideryNotes: "", stageAssignments: {}, groupId: "",
     createdAt: new Date().toISOString().slice(0, 10), stageLog: [],
   };
 }
@@ -517,8 +518,15 @@ function OrdersView({ data, update, canEdit }) {
     if (isNew) {
       const nextNo = (data.counters?.order || 1000) + 1;
       order = { ...orderInput, orderNo: nextNo };
-      list.push(order);
       patch.counters = { ...data.counters, order: nextNo };
+      if (order.groupId === "__new__") {
+        const nextGroupNo = (patch.counters.group || data.counters?.group || 1000) + 1;
+        const group = { id: uid("grp"), groupNo: nextGroupNo, customerId: order.customerId, createdAt: new Date().toISOString().slice(0, 10) };
+        patch.orderGroups = [...data.orderGroups, group];
+        patch.counters = { ...patch.counters, group: nextGroupNo };
+        order = { ...order, groupId: group.id };
+      }
+      list.push(order);
     } else {
       list[i] = order;
     }
@@ -558,7 +566,7 @@ function OrdersView({ data, update, canEdit }) {
 
   return (
     <>
-      <CrudSection icon={ShoppingBag} title="إدارة الطلبات" addLabel="طلب جديد" columns={["الرقم", "العميل", "النوع", "الفرع", "التسليم", "المرحلة", "الموقع"]} items={data.orders} searchKeys={["orderNo"]}
+      <CrudSection icon={ShoppingBag} title="إدارة الطلبات" addLabel="طلب جديد" columns={["الرقم", "العميل", "النوع", "الطلبية", "الفرع", "التسليم", "المرحلة", "الموقع"]} items={data.orders} searchKeys={["orderNo"]}
         onAdd={canEdit ? () => data.customers.length ? setModal({ ...emptyOrder(data) }) : alert("أضف عميلاً أولاً من قسم إدارة العملاء") : undefined}
         onEdit={canEdit ? (it) => setModal(it) : undefined}
         onDelete={canEdit ? (it) => {
@@ -575,6 +583,7 @@ function OrdersView({ data, update, canEdit }) {
             <td style={{ padding: "10px 14px", fontWeight: 700, color: THEME.brass, cursor: "pointer" }} onClick={() => setDetail(it)}>#{it.orderNo || it.id.slice(-6)}</td>
             <td style={{ padding: "10px 14px", fontWeight: 600, cursor: "pointer" }} onClick={() => setDetail(it)}>{custName(it.customerId)}</td>
             <td style={{ padding: "10px 14px" }}>{it.orderType}</td>
+            <td style={{ padding: "10px 14px", fontSize: 12 }}>{it.groupId ? <Badge color={THEME.teal}>#{data.orderGroups.find((g) => g.id === it.groupId)?.groupNo || "—"}</Badge> : "—"}</td>
             <td style={{ padding: "10px 14px" }}>{data.branches.find((b) => b.id === it.branch)?.name || "—"}</td>
             <td style={{ padding: "10px 14px" }}>{it.deliveryDate || "—"}</td>
             <td style={{ padding: "10px 14px" }}><Badge color={it.stage === "تم التسليم" ? THEME.teal : THEME.brass}>{it.stage}</Badge></td>
@@ -664,6 +673,21 @@ function OrdersView({ data, update, canEdit }) {
             <Field label="نوع الخياطة"><SelectInput options={data.orderTypes.map((t) => ({ value: t, label: t }))} value={modal.orderType} onChange={(e) => setModal({ ...modal, orderType: e.target.value })} /></Field>
             <Field label="الفرع"><SelectInput options={data.branches.map((b) => ({ value: b.id, label: b.name }))} value={modal.branch} onChange={(e) => setModal({ ...modal, branch: e.target.value })} /></Field>
           </div>
+          {!data.orders.find((o) => o.id === modal.id) && (
+            <div style={{ marginBottom: 8 }}>
+              <Field label="ربط بطلبية (اختياري — لو العميل طالب أكثر من نوع بنفس الزيارة وتبي فاتورة واحدة تجمعهم)">
+                <SelectInput
+                  options={[
+                    { value: "", label: "طلب مستقل (الوضع الافتراضي)" },
+                    { value: "__new__", label: "إنشاء طلبية جديدة تجمع هذا الطلب مع طلبات قادمة" },
+                    ...data.orderGroups.filter((g) => g.customerId === modal.customerId).map((g) => ({ value: g.id, label: `إضافة إلى طلبية #${g.groupNo}` })),
+                  ]}
+                  value={modal.groupId || ""}
+                  onChange={(e) => setModal({ ...modal, groupId: e.target.value })}
+                />
+              </Field>
+            </div>
+          )}
           <div style={{ fontWeight: 700, margin: "14px 0 8px" }}>المقاسات</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
             {data.measurementFields.map((m) => <Field key={m.key} label={m.label}><TextInput value={modal.measurements[m.key] || ""} onChange={(e) => setModal({ ...modal, measurements: { ...modal.measurements, [m.key]: e.target.value } })} /></Field>)}
@@ -905,6 +929,7 @@ function AppointmentsView({ data, update, canEdit }) {
 // ---------- Invoices ----------
 function InvoicesView({ data, update }) {
   const [printing, setPrinting] = useState(null);
+  const [printingGroup, setPrintingGroup] = useState(null);
   const custName = (id) => data.customers.find((c) => c.id === id)?.name || "—";
   return (
     <div>
@@ -912,6 +937,22 @@ function InvoicesView({ data, update }) {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}><Receipt size={22} color={THEME.brass} /><h2 style={{ margin: 0, fontFamily: "Amiri, serif", fontSize: 26, color: THEME.ink }}>الفواتير</h2></div>
         <Field label="ثيم الفاتورة"><SelectInput options={[{ value: "classic", label: "كلاسيكي" }, { value: "modern", label: "عصري (شريط علوي)" }, { value: "minimal", label: "مبسّط" }, { value: "elegant", label: "أنيق (إطار مزدوج)" }]} value={data.invoiceTheme} onChange={(e) => update({ invoiceTheme: e.target.value })} /></Field>
       </div>
+
+      {data.orderGroups.length > 0 && (
+        <Panel style={{ marginBottom: 20 }}>
+          <div style={{ fontWeight: 700, marginBottom: 10 }}>الطلبيات المجمّعة (عدة أنواع بفاتورة واحدة)</div>
+          {data.orderGroups.map((g) => {
+            const members = data.orders.filter((o) => o.groupId === g.id);
+            return (
+              <div key={g.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px dashed ${THEME.border}`, fontSize: 13.5 }}>
+                <span>طلبية #{g.groupNo} — {custName(g.customerId)} — {members.length} طلب</span>
+                <Btn small variant="ghost" onClick={() => setPrintingGroup(g)}><Printer size={13} />فاتورة الطلبية</Btn>
+              </div>
+            );
+          })}
+        </Panel>
+      )}
+
       <Panel style={{ padding: 0 }}>
         {data.orders.length === 0 ? <EmptyState text="لا توجد طلبات لإصدار فواتير لها" /> : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
@@ -932,6 +973,21 @@ function InvoicesView({ data, update }) {
           </table>
         )}
       </Panel>
+      {printingGroup && (() => {
+        const members = data.orders.filter((o) => o.groupId === printingGroup.id);
+        const totalPrice = members.reduce((s, o) => s + (Number(o.price) || 0), 0);
+        const totalDeposit = members.reduce((s, o) => s + (Number(o.deposit) || 0), 0);
+        return (
+          <RecordPrintModal data={data} title={`فاتورة الطلبية #${printingGroup.groupNo}`} refLabel="طلبية" refNo={printingGroup.groupNo} onClose={() => setPrintingGroup(null)}
+            rows={[
+              { label: "العميل", value: custName(printingGroup.customerId) },
+              ...members.map((o) => ({ label: `طلب #${o.orderNo} — ${o.orderType}`, value: `${o.price || 0} ر.س` })),
+              { label: "الإجمالي", value: `${totalPrice} ر.س` },
+              { label: "العربون المدفوع", value: `${totalDeposit} ر.س` },
+              { label: "المتبقي", value: `${totalPrice - totalDeposit} ر.س` },
+            ]} />
+        );
+      })()}
       {printing && (() => {
         const theme = data.invoiceTheme || "classic";
         const accent = theme === "elegant" ? "#B8860B" : theme === "minimal" ? "#333333" : theme === "modern" ? THEME.teal : THEME.brass;
@@ -1074,8 +1130,10 @@ function EmployeesView({ data, update, canEdit }) {
 function SuppliersView({ data, update, canEdit }) {
   const [sModal, setSModal] = useState(null);
   const [pModal, setPModal] = useState(null);
+  const [payModal, setPayModal] = useState(null);
+  const [statementFor, setStatementFor] = useState(null);
   const [printingPurchase, setPrintingPurchase] = useState(null);
-  const sFields = [{ key: "name", label: "اسم المورد" }, { key: "phone", label: "الجوال" }, { key: "materialType", label: "نوع المواد (أقمشة، أزرار، خيوط...)" }];
+  const sFields = [{ key: "name", label: "اسم المورد" }, { key: "phone", label: "الجوال" }, { key: "materialType", label: "نوع المواد (أقمشة، أزرار، خيوط...)" }, { key: "openingBalance", label: "الرصيد الافتتاحي (ر.س) — ما كنت مديون به له قبل النظام", type: "number" }];
   const saveSupplier = (values) => { const list = [...data.suppliers]; if (sModal.mode === "add") list.push({ id: uid("sup"), ...values }); else { const i = list.findIndex((s) => s.id === values.id); list[i] = values; } update({ suppliers: list }); setSModal(null); };
   const categories = ["قماش", "أزرار", "خيوط", "بطانة", "أخرى"];
   const pFields = [
@@ -1087,17 +1145,52 @@ function SuppliersView({ data, update, canEdit }) {
   ];
   const savePurchase = (values) => { const list = [...data.purchases]; if (pModal.mode === "add") list.push({ id: uid("pur"), ...values }); else { const i = list.findIndex((p) => p.id === values.id); list[i] = values; } update({ purchases: list }); setPModal(null); };
 
+  const supplierBalance = (s) => {
+    const purchased = data.purchases.filter((p) => p.supplierId === s.id).reduce((sum, p) => sum + (Number(p.cost) || 0), 0);
+    const paid = data.vouchers.filter((v) => v.type === "صرف" && v.supplierId === s.id).reduce((sum, v) => sum + (Number(v.amount) || 0), 0);
+    return (Number(s.openingBalance) || 0) + purchased - paid;
+  };
+  const payFields = [
+    { key: "accountId", label: "الحساب", type: "select", options: data.financeAccounts.map((a) => ({ value: a.id, label: a.name })) },
+    { key: "amount", label: "المبلغ (ر.س)", type: "number" }, { key: "date", label: "التاريخ", type: "date" },
+  ];
+  const savePayment = () => {
+    const amt = Number(payModal.values.amount);
+    if (!amt || amt <= 0) { alert("أدخل مبلغًا صحيحًا"); return; }
+    const voucher = { id: uid("v"), type: "صرف", accountId: payModal.values.accountId, branch: data.branches[0]?.id, category: "دفعة لمورد", amount: amt, description: `دفعة للمورد ${payModal.supplier.name}`, date: payModal.values.date || new Date().toISOString().slice(0, 10), supplierId: payModal.supplier.id };
+    const vouchers = [...data.vouchers, voucher];
+    const financeAccounts = data.financeAccounts.map((a) => a.id === payModal.values.accountId ? { ...a, balance: (Number(a.balance) || 0) - amt } : a);
+    update({ vouchers, financeAccounts });
+    setPayModal(null);
+  };
+
   const stockMap = {}; data.purchases.filter((p) => p.category === "قماش").forEach((p) => { stockMap[p.item] = (stockMap[p.item] || 0) + Number(p.qty || 0); });
   const usedMap = {}; data.orders.forEach((o) => { if (o.fabricType) usedMap[o.fabricType] = (usedMap[o.fabricType] || 0) + Number(o.fabricUsed || 0); });
   const stockRows = Object.keys(stockMap).map((item) => ({ item, purchased: stockMap[item], used: usedMap[item] || 0, remaining: stockMap[item] - (usedMap[item] || 0) }));
 
   return (
     <div>
-      <CrudSection icon={Building2} title="الموردون" addLabel="مورد جديد" columns={["الاسم", "المواد", "الجوال"]} items={data.suppliers} searchKeys={["name"]}
-        onAdd={canEdit ? () => setSModal({ mode: "add", values: {} }) : undefined}
+      <CrudSection icon={Building2} title="الموردون" addLabel="مورد جديد" columns={["الاسم", "المواد", "الجوال", "الرصيد المستحق", ""]} items={data.suppliers} searchKeys={["name"]}
+        onAdd={canEdit ? () => setSModal({ mode: "add", values: { openingBalance: 0 } }) : undefined}
         onEdit={canEdit ? (it) => setSModal({ mode: "edit", values: it }) : undefined}
         onDelete={canEdit ? (it) => update({ suppliers: data.suppliers.filter((s) => s.id !== it.id) }) : undefined}
-        renderRow={(it) => (<><td style={{ padding: "10px 14px", fontWeight: 600 }}>{it.name}</td><td style={{ padding: "10px 14px" }}>{it.materialType}</td><td style={{ padding: "10px 14px" }}>{it.phone}</td></>)} />
+        renderRow={(it) => {
+          const bal = supplierBalance(it);
+          return (
+            <>
+              <td style={{ padding: "10px 14px", fontWeight: 600 }}>{it.name}</td>
+              <td style={{ padding: "10px 14px" }}>{it.materialType}</td>
+              <td style={{ padding: "10px 14px" }}>{it.phone}</td>
+              <td style={{ padding: "10px 14px", fontWeight: 700, color: bal > 0 ? THEME.red : THEME.teal }}>{bal.toLocaleString()} ر.س</td>
+              <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
+                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                  {canEdit && <Btn small variant="ghost" onClick={() => setPayModal({ supplier: it, values: { accountId: data.financeAccounts[0]?.id, amount: "", date: new Date().toISOString().slice(0, 10) } })}>تسجيل دفعة</Btn>}
+                  <Btn small variant="ghost" onClick={() => setStatementFor(it)}>كشف حساب</Btn>
+                </div>
+              </td>
+            </>
+          );
+        }} />
 
       <div style={{ height: 24 }} />
       <Panel style={{ marginBottom: 20 }}>
@@ -1123,6 +1216,45 @@ function SuppliersView({ data, update, canEdit }) {
           <div style={{ display: "flex", gap: 8 }}><Btn variant="brass" onClick={() => savePurchase(pModal.values)}>حفظ</Btn><Btn variant="ghost" onClick={() => setPModal(null)}>إلغاء</Btn></div>
         </Modal>
       )}
+      {payModal && (
+        <Modal title={`تسجيل دفعة للمورد: ${payModal.supplier.name}`} onClose={() => setPayModal(null)}>
+          <FormFields fields={payFields} values={payModal.values} setValues={(v) => setPayModal({ ...payModal, values: v })} />
+          <div style={{ fontSize: 12.5, color: "#7A7061", marginBottom: 10 }}>الرصيد المستحق حاليًا: {supplierBalance(payModal.supplier).toLocaleString()} ر.س</div>
+          <div style={{ display: "flex", gap: 8 }}><Btn variant="brass" onClick={savePayment}>حفظ الدفعة</Btn><Btn variant="ghost" onClick={() => setPayModal(null)}>إلغاء</Btn></div>
+        </Modal>
+      )}
+      {statementFor && (() => {
+        const s = statementFor;
+        const rows = [
+          ...data.purchases.filter((p) => p.supplierId === s.id).map((p) => ({ date: p.date, desc: `شراء: ${p.item}`, debit: Number(p.cost) || 0, credit: 0 })),
+          ...data.vouchers.filter((v) => v.type === "صرف" && v.supplierId === s.id).map((v) => ({ date: v.date, desc: "دفعة مسدّدة", debit: 0, credit: Number(v.amount) || 0 })),
+        ].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+        let running = Number(s.openingBalance) || 0;
+        const withRunning = rows.map((r) => { running += r.debit - r.credit; return { ...r, running }; });
+        return (
+          <Modal title={`كشف حساب المورد — ${s.name}`} onClose={() => setStatementFor(null)} wide>
+            <div style={{ fontSize: 13.5, marginBottom: 10 }}>الرصيد الافتتاحي: <b>{(Number(s.openingBalance) || 0).toLocaleString()} ر.س</b></div>
+            <div style={{ maxHeight: 360, overflowY: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead><tr style={{ background: "#EFE7D6" }}><th style={{ padding: "8px 10px", textAlign: "right" }}>التاريخ</th><th style={{ padding: "8px 10px", textAlign: "right" }}>البيان</th><th style={{ padding: "8px 10px", textAlign: "right" }}>مدين (زيادة)</th><th style={{ padding: "8px 10px", textAlign: "right" }}>دائن (سداد)</th><th style={{ padding: "8px 10px", textAlign: "right" }}>الرصيد</th></tr></thead>
+                <tbody>
+                  {withRunning.length === 0 ? <tr><td colSpan={5} style={{ padding: 14, textAlign: "center", color: "#8A8071" }}>لا توجد حركات بعد</td></tr> : withRunning.map((r, i) => (
+                    <tr key={i} style={{ borderTop: `1px solid ${THEME.border}` }}>
+                      <td style={{ padding: "7px 10px" }}>{r.date || "—"}</td>
+                      <td style={{ padding: "7px 10px" }}>{r.desc}</td>
+                      <td style={{ padding: "7px 10px" }}>{r.debit ? r.debit.toLocaleString() : "—"}</td>
+                      <td style={{ padding: "7px 10px" }}>{r.credit ? r.credit.toLocaleString() : "—"}</td>
+                      <td style={{ padding: "7px 10px", fontWeight: 700 }}>{r.running.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ marginTop: 12, fontSize: 15, fontWeight: 700, color: THEME.brass }}>الرصيد الحالي المستحق: {supplierBalance(s).toLocaleString()} ر.س</div>
+            <Btn variant="brass" small onClick={() => window.print && window.print()} style={{ marginTop: 12 }}><Printer size={14} />طباعة الكشف</Btn>
+          </Modal>
+        );
+      })()}
       {printingPurchase && (
         <RecordPrintModal data={data} title="سند شراء" refLabel="عملية شراء" refNo={printingPurchase.id.slice(-6)} attachment={printingPurchase.attachment} onClose={() => setPrintingPurchase(null)}
           rows={[
@@ -1624,7 +1756,9 @@ export default function App() {
         else if (!parsed.shopSettings.readyMessageTemplate) parsed.shopSettings.readyMessageTemplate = seedData().shopSettings.readyMessageTemplate;
         if (!parsed.embroideryTypes) parsed.embroideryTypes = seedData().embroideryTypes;
         else if (parsed.embroideryTypes.length && typeof parsed.embroideryTypes[0] === "string") parsed.embroideryTypes = parsed.embroideryTypes.map((n) => ({ id: uid("emb"), name: n }));
-        if (!parsed.counters) parsed.counters = { customer: 1000, order: 1000 };
+        if (!parsed.counters) parsed.counters = { customer: 1000, order: 1000, group: 1000 };
+        else if (parsed.counters.group === undefined) parsed.counters.group = 1000;
+        if (!parsed.orderGroups) parsed.orderGroups = [];
         if (parsed.customers) { let c = parsed.counters.customer; parsed.customers = parsed.customers.map((cu) => cu.code ? cu : (c += 1, { ...cu, code: c })); parsed.counters.customer = c; }
         if (parsed.orders) { let o = parsed.counters.order; parsed.orders = parsed.orders.map((ord) => ord.orderNo ? ord : (o += 1, { ...ord, orderNo: o })); parsed.counters.order = o; }
         if (parsed.users) parsed.users = parsed.users.map((u) => u.permissions && u.permissions.settings ? u : { ...u, permissions: { ...u.permissions, settings: u.role === "مدير عام" ? { view: true, edit: true } : { view: false, edit: false } } });
@@ -1642,7 +1776,7 @@ export default function App() {
     setData(next);
     try { await window.storage.set(STORAGE_KEY, JSON.stringify(next), false); }
     catch (e) {
-      alert("⚠ فشل حفظ آخر تغيير بشكل دائم! على الأغلب مساحة تخزين المتصفح ممتلئة.\nالتغيير ظاهر لك الآن مؤقتًا لكن قد يختفي عند إغلاق المتصفح.\nقلّل عدد الصور المرفوعة أو احذف صورًا كبيرة من دليل التصاميم أو المرفقات، ثم أعد المحاولة.");
+      alert("⚠ فشل حفظ آخر تغيير بشكل دائم!\nتفاصيل الخطأ: " + (e?.message || String(e)) + "\nالتغيير ظاهر لك الآن مؤقتًا لكن قد يختفي عند إعادة تحميل الصفحة.");
     }
   };
 
