@@ -69,7 +69,7 @@ const seedData = () => ({
     { id: "network", name: "الشبكة", type: "شبكة", balance: 0 },
   ],
   vouchers: [], journalEntries: [], appointments: [],
-  counters: { customer: 1000, order: 1000, group: 1000 },
+  counters: { customer: 1000, order: 1000, group: 1000, purchase: 1000 },
   orderGroups: [],
   shopSettings: { name: "مشغل الخياطة الرجالية", legalName: "", logo: "", phone: "", whatsapp: "", address: "", city: "", crNumber: "", taxNumber: "", website: "", bankName: "", iban: "", invoiceFooter: "", appTheme: "classic", readyMessageTemplate: "مرحبًا {name}، طلبك رقم #{orderNo} جاهز للاستلام من {shop}. بانتظارك! 🙏" },
   users: [{ id: "u1", name: "مدير النظام", username: "admin", password: "admin123", phone: "", role: "مدير عام", branches: ["b1"], permissions: defaultPermissions("مدير عام") }],
@@ -405,6 +405,12 @@ function DesignsView({ data, update, canEdit }) {
   const fileRef = useRef(null);
   const addOrderType = (name) => { if (name && !data.orderTypes.includes(name)) update({ orderTypes: [...data.orderTypes, name] }); };
   const removeOrderType = (name) => update({ orderTypes: data.orderTypes.filter((t) => t !== name) });
+  const [newMeasureLabel, setNewMeasureLabel] = useState("");
+  const [editingMeasureKey, setEditingMeasureKey] = useState(null);
+  const [editingMeasureLabel, setEditingMeasureLabel] = useState("");
+  const addMeasurementField = (label) => { if (!label) return; update({ measurementFields: [...data.measurementFields, { key: uid("m"), label }] }); };
+  const removeMeasurementField = (key) => update({ measurementFields: data.measurementFields.filter((m) => m.key !== key) });
+  const saveMeasurementLabel = (key) => { update({ measurementFields: data.measurementFields.map((m) => m.key === key ? { ...m, label: editingMeasureLabel || m.label } : m) }); setEditingMeasureKey(null); };
   const addItem = (catId, name, image) => {
     if (catId === "embroidery") { update({ embroideryTypes: [...(data.embroideryTypes || []), { id: uid("emb"), name, image }] }); return; }
     const cats = data.designCategories.map((c) => c.id === catId ? { ...c, items: [...c.items, { id: uid("d"), name, image }] } : c); update({ designCategories: cats });
@@ -429,6 +435,30 @@ function DesignsView({ data, update, canEdit }) {
           {data.orderTypes.map((t) => <span key={t} style={{ display: "flex", alignItems: "center", gap: 6, background: "#EFE7D6", padding: "6px 12px", borderRadius: 20, fontSize: 13.5 }}>{t}{canEdit && <X size={13} style={{ cursor: "pointer" }} onClick={() => removeOrderType(t)} />}</span>)}
         </div>
         {canEdit && <div style={{ display: "flex", gap: 8 }}><TextInput placeholder="نوع جديد مثل: بشت، سديري..." value={newType} onChange={(e) => setNewType(e.target.value)} style={{ maxWidth: 260 }} /><Btn variant="brass" onClick={() => { addOrderType(newType.trim()); setNewType(""); }}><Plus size={16} />إضافة</Btn></div>}
+      </Panel>
+
+      <Panel style={{ marginBottom: 20 }}>
+        <div style={{ fontWeight: 700, marginBottom: 10, color: THEME.ink }}>مسميات القياسات (قابلة للتعديل والإضافة والحذف)</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+          {data.measurementFields.map((m) => (
+            <div key={m.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {editingMeasureKey === m.key ? (
+                <>
+                  <TextInput value={editingMeasureLabel} onChange={(e) => setEditingMeasureLabel(e.target.value)} style={{ maxWidth: 220 }} />
+                  <Btn small variant="brass" onClick={() => saveMeasurementLabel(m.key)}>حفظ</Btn>
+                  <Btn small variant="ghost" onClick={() => setEditingMeasureKey(null)}>إلغاء</Btn>
+                </>
+              ) : (
+                <>
+                  <span style={{ background: "#EFE7D6", padding: "6px 12px", borderRadius: 20, fontSize: 13.5 }}>{m.label}</span>
+                  {canEdit && <Pencil size={14} style={{ cursor: "pointer", color: THEME.teal }} onClick={() => { setEditingMeasureKey(m.key); setEditingMeasureLabel(m.label); }} />}
+                  {canEdit && <X size={15} style={{ cursor: "pointer", color: THEME.red }} onClick={() => removeMeasurementField(m.key)} />}
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+        {canEdit && <div style={{ display: "flex", gap: 8 }}><TextInput placeholder="مسمى قياس جديد مثل: طول الكم الأيسر" value={newMeasureLabel} onChange={(e) => setNewMeasureLabel(e.target.value)} style={{ maxWidth: 260 }} /><Btn variant="brass" onClick={() => { addMeasurementField(newMeasureLabel.trim()); setNewMeasureLabel(""); }}><Plus size={16} />إضافة</Btn></div>}
       </Panel>
 
       <Panel style={{ marginBottom: 16 }}>
@@ -486,7 +516,7 @@ function emptyOrder(data) {
   const designs = {}; data.designCategories.forEach((c) => { designs[c.id] = c.items[0]?.id || ""; });
   const measurements = {}; data.measurementFields.forEach((m) => { measurements[m.key] = ""; });
   return {
-    id: uid("ord"), customerId: "", orderType: data.orderTypes[0] || "", branch: data.branches[0]?.id || "",
+    id: uid("ord"), customerId: data.customers[0]?.id || "", orderType: data.orderTypes[0] || "", branch: data.branches[0]?.id || "",
     measurements, designs, price: "", deposit: "", deliveryDate: "", stage: data.orderStages[0],
     shelf: "", column: "", notes: "", fabricType: "", fabricUsed: "", paymentMethod: "نقدي",
     assignedTailorId: "", discount: "", couponCode: "", alterationsRemaining: 2, alterationLog: [],
@@ -659,8 +689,12 @@ function OrdersView({ data, update, canEdit }) {
                 })}
                 {!Object.keys(ROLE_STAGE_MAP).some((role) => { const stage = ROLE_STAGE_MAP[role]; return (stage === "الخياطة" ? (detail.stageAssignments?.[stage] || detail.assignedTailorId) : detail.stageAssignments?.[stage]); }) && "لم يُسند الطلب لأحد بعد"}
               </div>
-              <div style={{ fontWeight: 700, margin: "12px 0 6px" }}>إشعار العميل</div>
-              {canEdit ? <WhatsAppNotifyButton order={detail} data={data} update={update} custPhone={data.customers.find((c) => c.id === detail.customerId)?.phone} custName={custName(detail.customerId)} /> : <div style={{ fontSize: 12, color: "#8A8071" }}>لا تملك صلاحية إرسال إشعارات.</div>}
+              {detail.stage === "جاهز للتسليم" && (
+                <div style={{ marginTop: 14, background: `${THEME.teal}1a`, border: `1px solid ${THEME.teal}`, borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontWeight: 700, color: THEME.teal, marginBottom: 8 }}>🎉 الطلب جاهز للتسليم — أرسل إشعار للعميل الآن</div>
+                  {canEdit ? <WhatsAppNotifyButton order={detail} data={data} update={update} custPhone={data.customers.find((c) => c.id === detail.customerId)?.phone} custName={custName(detail.customerId)} /> : <div style={{ fontSize: 12, color: "#8A8071" }}>لا تملك صلاحية إرسال إشعارات.</div>}
+                </div>
+              )}
             </div>
           </div>
         </Modal>
@@ -882,7 +916,8 @@ function CourierView({ data, update, canEdit }) {
             <Badge color={found.stage === "تم التسليم" ? THEME.teal : THEME.brass}>{found.stage}</Badge>
             {canEdit && found.stage !== "تم التسليم" && !scanning && <div style={{ marginTop: 14 }}><Btn variant="brass" onClick={advance}>{batchStage ? `${opType} — ${batchStage}` : "تسجيل الانتقال للمرحلة التالية"}</Btn></div>}
             {found.stage === "جاهز للتسليم" && !scanning && (
-              <div style={{ marginTop: 12 }}>
+              <div style={{ marginTop: 12, background: `${THEME.teal}1a`, border: `1px solid ${THEME.teal}`, borderRadius: 8, padding: 12 }}>
+                <div style={{ fontWeight: 700, color: THEME.teal, marginBottom: 8 }}>🎉 الطلب جاهز للتسليم — أرسل إشعار للعميل الآن</div>
                 {canEdit ? <WhatsAppNotifyButton order={found} data={data} update={update} custPhone={data.customers.find((c) => c.id === found.customerId)?.phone} custName={custName(found.customerId)} /> : null}
               </div>
             )}
@@ -1143,7 +1178,18 @@ function SuppliersView({ data, update, canEdit }) {
     { key: "unit", label: "الوحدة (متر، قطعة...)" }, { key: "cost", label: "التكلفة (ر.س)", type: "number" },
     { key: "date", label: "التاريخ", type: "date" },
   ];
-  const savePurchase = (values) => { const list = [...data.purchases]; if (pModal.mode === "add") list.push({ id: uid("pur"), ...values }); else { const i = list.findIndex((p) => p.id === values.id); list[i] = values; } update({ purchases: list }); setPModal(null); };
+  const savePurchase = (values) => {
+    const list = [...data.purchases];
+    if (pModal.mode === "add") {
+      const nextNo = (data.counters?.purchase || 1000) + 1;
+      list.push({ id: uid("pur"), purchaseNo: nextNo, ...values });
+      update({ purchases: list, counters: { ...data.counters, purchase: nextNo } });
+    } else {
+      const i = list.findIndex((p) => p.id === values.id); list[i] = values;
+      update({ purchases: list });
+    }
+    setPModal(null);
+  };
 
   const supplierBalance = (s) => {
     const purchased = data.purchases.filter((p) => p.supplierId === s.id).reduce((sum, p) => sum + (Number(p.cost) || 0), 0);
@@ -1202,11 +1248,11 @@ function SuppliersView({ data, update, canEdit }) {
         ))}
       </Panel>
 
-      <CrudSection icon={Truck} title="سجل المشتريات" addLabel="عملية شراء" columns={["المورد", "التصنيف", "الصنف", "الكمية", "التكلفة", "التاريخ", "مرفق"]} items={data.purchases} searchKeys={["item"]}
-        onAdd={canEdit ? () => data.suppliers.length ? setPModal({ mode: "add", values: { category: categories[0] } }) : alert("أضف موردًا أولاً") : undefined}
+      <CrudSection icon={Truck} title="سجل المشتريات" addLabel="عملية شراء" columns={["الرقم", "المورد", "التصنيف", "الصنف", "الكمية", "التكلفة", "التاريخ", "مرفق"]} items={data.purchases} searchKeys={["item", "purchaseNo"]}
+        onAdd={canEdit ? () => data.suppliers.length ? setPModal({ mode: "add", values: { category: categories[0], supplierId: data.suppliers[0]?.id || "" } }) : alert("أضف موردًا أولاً") : undefined}
         onEdit={canEdit ? (it) => setPModal({ mode: "edit", values: it }) : undefined}
         onDelete={canEdit ? (it) => update({ purchases: data.purchases.filter((p) => p.id !== it.id) }) : undefined}
-        renderRow={(it) => (<><td style={{ padding: "10px 14px" }}>{data.suppliers.find((s) => s.id === it.supplierId)?.name || "—"}</td><td style={{ padding: "10px 14px" }}>{it.category}</td><td style={{ padding: "10px 14px" }}>{it.item}</td><td style={{ padding: "10px 14px" }}>{it.qty} {it.unit}</td><td style={{ padding: "10px 14px" }}>{it.cost} ر.س</td><td style={{ padding: "10px 14px" }}>{it.date}</td><td style={{ padding: "10px 14px" }}><Btn small variant="ghost" onClick={() => setPrintingPurchase(it)}><Printer size={13} />{it.attachment ? "📎" : ""}</Btn></td></>)} />
+        renderRow={(it) => (<><td style={{ padding: "10px 14px", fontWeight: 700, color: THEME.brass }}>#{it.purchaseNo || it.id.slice(-6)}</td><td style={{ padding: "10px 14px" }}>{data.suppliers.find((s) => s.id === it.supplierId)?.name || "—"}</td><td style={{ padding: "10px 14px" }}>{it.category}</td><td style={{ padding: "10px 14px" }}>{it.item}</td><td style={{ padding: "10px 14px" }}>{it.qty} {it.unit}</td><td style={{ padding: "10px 14px" }}>{it.cost} ر.س</td><td style={{ padding: "10px 14px" }}>{it.date}</td><td style={{ padding: "10px 14px" }}><Btn small variant="ghost" onClick={() => setPrintingPurchase(it)}><Printer size={13} />{it.attachment ? "📎" : ""}</Btn></td></>)} />
 
       {sModal && <Modal title={sModal.mode === "add" ? "إضافة مورد" : "تعديل مورد"} onClose={() => setSModal(null)}><FormFields fields={sFields} values={sModal.values} setValues={(v) => setSModal({ ...sModal, values: v })} /><div style={{ display: "flex", gap: 8 }}><Btn variant="brass" onClick={() => saveSupplier(sModal.values)}>حفظ</Btn><Btn variant="ghost" onClick={() => setSModal(null)}>إلغاء</Btn></div></Modal>}
       {pModal && (
@@ -1256,7 +1302,7 @@ function SuppliersView({ data, update, canEdit }) {
         );
       })()}
       {printingPurchase && (
-        <RecordPrintModal data={data} title="سند شراء" refLabel="عملية شراء" refNo={printingPurchase.id.slice(-6)} attachment={printingPurchase.attachment} onClose={() => setPrintingPurchase(null)}
+        <RecordPrintModal data={data} title="سند شراء" refLabel="عملية شراء" refNo={printingPurchase.purchaseNo || printingPurchase.id.slice(-6)} attachment={printingPurchase.attachment} onClose={() => setPrintingPurchase(null)}
           rows={[
             { label: "المورد", value: data.suppliers.find((s) => s.id === printingPurchase.supplierId)?.name || "—" },
             { label: "التصنيف", value: printingPurchase.category },
@@ -1761,6 +1807,8 @@ export default function App() {
         if (!parsed.orderGroups) parsed.orderGroups = [];
         if (parsed.customers) { let c = parsed.counters.customer; parsed.customers = parsed.customers.map((cu) => cu.code ? cu : (c += 1, { ...cu, code: c })); parsed.counters.customer = c; }
         if (parsed.orders) { let o = parsed.counters.order; parsed.orders = parsed.orders.map((ord) => ord.orderNo ? ord : (o += 1, { ...ord, orderNo: o })); parsed.counters.order = o; }
+        if (parsed.counters.purchase === undefined) parsed.counters.purchase = 1000;
+        if (parsed.purchases) { let p = parsed.counters.purchase; parsed.purchases = parsed.purchases.map((pur) => pur.purchaseNo ? pur : (p += 1, { ...pur, purchaseNo: p })); parsed.counters.purchase = p; }
         if (parsed.users) parsed.users = parsed.users.map((u) => u.permissions && u.permissions.settings ? u : { ...u, permissions: { ...u.permissions, settings: u.role === "مدير عام" ? { view: true, edit: true } : { view: false, edit: false } } });
         setData(parsed);
       }
@@ -1776,7 +1824,7 @@ export default function App() {
     setData(next);
     try { await window.storage.set(STORAGE_KEY, JSON.stringify(next), false); }
     catch (e) {
-      alert("⚠ فشل حفظ آخر تغيير بشكل دائم! على الأغلب مساحة تخزين المتصفح ممتلئة.\nالتغيير ظاهر لك الآن مؤقتًا لكن قد يختفي عند إغلاق المتصفح.\nقلّل عدد الصور المرفوعة أو احذف صورًا كبيرة من دليل التصاميم أو المرفقات، ثم أعد المحاولة.");
+      alert("⚠ فشل حفظ آخر تغيير بشكل دائم!\nتفاصيل الخطأ: " + (e?.message || String(e)) + "\nالتغيير ظاهر لك الآن مؤقتًا لكن قد يختفي عند إعادة تحميل الصفحة.");
     }
   };
 
