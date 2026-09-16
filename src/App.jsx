@@ -20,6 +20,7 @@ const THEME = { ...PALETTES.classic };
 function applyTheme(name) { Object.assign(THEME, PALETTES[name] || PALETTES.classic); }
 
 const uid = (p = "id") => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+const logEntry = (user, action, details) => ({ id: uid("log"), at: new Date().toLocaleString("ar-SA"), user: user || "غير معروف", action, details: details || "" });
 const PAYMENT_ACCOUNT_MAP = { "نقدي": "cash", "شبكة": "network", "تحويل بنكي": "bank" };
 const ROLE_STAGE_MAP = { "قصّاص": "القص", "خياط": "الخياطة", "كاوي": "الكي", "زرّار": "تركيب الأزرار" };
 const STAGE_ROLE_MAP = Object.fromEntries(Object.entries(ROLE_STAGE_MAP).map(([role, stage]) => [stage, role]));
@@ -71,6 +72,7 @@ const seedData = () => ({
   vouchers: [], journalEntries: [], appointments: [],
   counters: { customer: 1000, order: 1000, group: 1000, purchase: 1000 },
   orderGroups: [],
+  auditLog: [],
   shopSettings: { name: "مشغل الخياطة الرجالية", legalName: "", logo: "", phone: "", whatsapp: "", address: "", city: "", crNumber: "", taxNumber: "", website: "", bankName: "", iban: "", invoiceFooter: "", appTheme: "classic", readyMessageTemplate: "مرحبًا {name}، طلبك رقم #{orderNo} جاهز للاستلام من {shop}. بانتظارك! 🙏" },
   users: [{ id: "u1", name: "مدير النظام", username: "admin", password: "admin123", phone: "", role: "مدير عام", branches: ["b1"], permissions: defaultPermissions("مدير عام") }],
   invoiceTheme: "classic",
@@ -317,8 +319,8 @@ function RecordPrintModal({ data, title, refLabel, refNo, rows, attachment, onCl
 
 // ---------- Dashboard ----------
 function Dashboard({ data }) {
-  const activeOrders = data.orders.filter((o) => o.stage !== "تم التسليم");
-  const revenue = data.orders.reduce((s, o) => s + (Number(o.price) || 0), 0);
+  const activeOrders = data.orders.filter((o) => o.stage !== "تم التسليم" && !o.cancelled);
+  const revenue = data.orders.filter((o) => !o.cancelled).reduce((s, o) => s + (Number(o.price) || 0), 0);
   const stageCounts = data.orderStages.map((s) => ({ stage: s, count: data.orders.filter((o) => o.stage === s).length }));
   const maxCount = Math.max(1, ...stageCounts.map((s) => s.count));
   const kpis = [
@@ -354,7 +356,7 @@ function Dashboard({ data }) {
 }
 
 // ---------- Customers ----------
-function CustomersView({ data, update, canEdit }) {
+function CustomersView({ data, update, canEdit, currentUser }) {
   const [modal, setModal] = useState(null);
   const save = (values) => {
     const list = [...data.customers];
@@ -378,7 +380,7 @@ function CustomersView({ data, update, canEdit }) {
       <CrudSection icon={Users} title="إدارة العملاء" addLabel="عميل جديد" columns={["الكود", "الاسم", "الجوال", "عدد الطلبات", "نقاط الولاء", "التقييم"]} items={data.customers} searchKeys={["name", "phone", "code"]}
         onAdd={canEdit ? () => setModal({ mode: "add", values: {} }) : undefined}
         onEdit={canEdit ? (it) => setModal({ mode: "edit", values: it }) : undefined}
-        onDelete={canEdit ? (it) => update({ customers: data.customers.filter((c) => c.id !== it.id) }) : undefined}
+        onDelete={canEdit ? (it) => update({ customers: data.customers.filter((c) => c.id !== it.id), auditLog: [...(data.auditLog || []), logEntry(currentUser, "حذف عميل", it.name)] }) : undefined}
         renderRow={(it) => {
           const custOrders = data.orders.filter((o) => o.customerId === it.id);
           const spend = custOrders.reduce((s, o) => s + (Number(o.price) || 0), 0);
@@ -524,7 +526,7 @@ function emptyOrder(data) {
     createdAt: new Date().toISOString().slice(0, 10), stageLog: [],
   };
 }
-function OrdersView({ data, update, canEdit }) {
+function OrdersView({ data, update, canEdit, currentUser }) {
   const [modal, setModal] = useState(null);
   const [detail, setDetail] = useState(null);
   const [altNote, setAltNote] = useState("");
@@ -600,24 +602,28 @@ function OrdersView({ data, update, canEdit }) {
         onAdd={canEdit ? () => data.customers.length ? setModal({ ...emptyOrder(data) }) : alert("أضف عميلاً أولاً من قسم إدارة العملاء") : undefined}
         onEdit={canEdit ? (it) => setModal(it) : undefined}
         onDelete={canEdit ? (it) => {
+          if (it.cancelled) { alert("هذا الطلب ملغى بالفعل."); return; }
+          if (!window.confirm(`سيتم إلغاء الطلب #${it.orderNo || it.id.slice(-6)} مع الاحتفاظ بسجله (لا يُحذف نهائيًا). متابعة؟`)) return;
           const linked = data.vouchers.filter((v) => v.orderId === it.id);
           const financeAccounts = data.financeAccounts.map((a) => {
             const sum = linked.filter((v) => v.accountId === a.id).reduce((s, v) => s + (Number(v.amount) || 0), 0);
             return sum ? { ...a, balance: (Number(a.balance) || 0) - sum } : a;
           });
           const vouchers = data.vouchers.filter((v) => v.orderId !== it.id);
-          update({ orders: data.orders.filter((o) => o.id !== it.id), vouchers, financeAccounts });
+          const orders = data.orders.map((o) => o.id === it.id ? { ...o, cancelled: true, cancelledAt: new Date().toLocaleString("ar-SA") } : o);
+          const auditLog = [...(data.auditLog || []), logEntry(currentUser, "إلغاء طلب", `طلب #${it.orderNo || it.id.slice(-6)} — ${custName(it.customerId)}`)];
+          update({ orders, vouchers, financeAccounts, auditLog });
         } : undefined}
         renderRow={(it) => (
           <>
-            <td style={{ padding: "10px 14px", fontWeight: 700, color: THEME.brass, cursor: "pointer" }} onClick={() => setDetail(it)}>#{it.orderNo || it.id.slice(-6)}</td>
-            <td style={{ padding: "10px 14px", fontWeight: 600, cursor: "pointer" }} onClick={() => setDetail(it)}>{custName(it.customerId)}</td>
-            <td style={{ padding: "10px 14px" }}>{it.orderType}</td>
-            <td style={{ padding: "10px 14px", fontSize: 12 }}>{it.groupId ? <Badge color={THEME.teal}>#{data.orderGroups.find((g) => g.id === it.groupId)?.groupNo || "—"}</Badge> : "—"}</td>
-            <td style={{ padding: "10px 14px" }}>{data.branches.find((b) => b.id === it.branch)?.name || "—"}</td>
-            <td style={{ padding: "10px 14px" }}>{it.deliveryDate || "—"}</td>
-            <td style={{ padding: "10px 14px" }}><Badge color={it.stage === "تم التسليم" ? THEME.teal : THEME.brass}>{it.stage}</Badge></td>
-            <td style={{ padding: "10px 14px", fontSize: 12.5, color: "#7A7061" }}>{it.shelf ? `رف ${it.shelf} / عمود ${it.column}` : "—"}</td>
+            <td style={{ padding: "10px 14px", fontWeight: 700, color: THEME.brass, cursor: "pointer", opacity: it.cancelled ? 0.5 : 1 }} onClick={() => setDetail(it)}>#{it.orderNo || it.id.slice(-6)}</td>
+            <td style={{ padding: "10px 14px", fontWeight: 600, cursor: "pointer", opacity: it.cancelled ? 0.5 : 1 }} onClick={() => setDetail(it)}>{custName(it.customerId)}</td>
+            <td style={{ padding: "10px 14px", opacity: it.cancelled ? 0.5 : 1 }}>{it.orderType}</td>
+            <td style={{ padding: "10px 14px", fontSize: 12, opacity: it.cancelled ? 0.5 : 1 }}>{it.groupId ? <Badge color={THEME.teal}>#{data.orderGroups.find((g) => g.id === it.groupId)?.groupNo || "—"}</Badge> : "—"}</td>
+            <td style={{ padding: "10px 14px", opacity: it.cancelled ? 0.5 : 1 }}>{data.branches.find((b) => b.id === it.branch)?.name || "—"}</td>
+            <td style={{ padding: "10px 14px", opacity: it.cancelled ? 0.5 : 1 }}>{it.deliveryDate || "—"}</td>
+            <td style={{ padding: "10px 14px" }}>{it.cancelled ? <Badge color={THEME.red}>ملغى</Badge> : <Badge color={it.stage === "تم التسليم" ? THEME.teal : THEME.brass}>{it.stage}</Badge>}</td>
+            <td style={{ padding: "10px 14px", fontSize: 12.5, color: "#7A7061", opacity: it.cancelled ? 0.5 : 1 }}>{it.shelf ? `رف ${it.shelf} / عمود ${it.column}` : "—"}</td>
           </>
         )} />
 
@@ -1104,7 +1110,7 @@ function InvoicesView({ data, update }) {
 }
 
 // ---------- Employees ----------
-function EmployeesView({ data, update, canEdit }) {
+function EmployeesView({ data, update, canEdit, currentUser }) {
   const [modal, setModal] = useState(null);
   const roles = ["خياط", "مدير فرع", "قصّاص", "مراسل", "كاوي", "زرّار", "كاشير"];
   const fields = [
@@ -1149,7 +1155,7 @@ function EmployeesView({ data, update, canEdit }) {
       <CrudSection icon={Briefcase} title="إدارة الموظفين" addLabel="موظف جديد" columns={["الاسم", "الدور", "الفرع", "الجوال"]} items={data.employees} searchKeys={["name", "role"]}
         onAdd={canEdit ? () => setModal({ mode: "add", values: { role: roles[0], branch: data.branches[0]?.id } }) : undefined}
         onEdit={canEdit ? (it) => setModal({ mode: "edit", values: it }) : undefined}
-        onDelete={canEdit ? (it) => update({ employees: data.employees.filter((e) => e.id !== it.id) }) : undefined}
+        onDelete={canEdit ? (it) => update({ employees: data.employees.filter((e) => e.id !== it.id), auditLog: [...(data.auditLog || []), logEntry(currentUser, "حذف موظف", `${it.name} (${it.role})`)] }) : undefined}
         renderRow={(it) => (<><td style={{ padding: "10px 14px", fontWeight: 600 }}>{it.name}</td><td style={{ padding: "10px 14px" }}><Badge color={THEME.teal}>{it.role}</Badge></td><td style={{ padding: "10px 14px" }}>{data.branches.find((b) => b.id === it.branch)?.name || "—"}</td><td style={{ padding: "10px 14px" }}>{it.phone}</td></>)} />
       {modal && (
         <Modal title={modal.mode === "add" ? "إضافة موظف" : "تعديل موظف"} onClose={() => setModal(null)}>
@@ -1324,7 +1330,7 @@ function FinanceCharts({ data }) {
   const perBranch = data.branches.map((b) => {
     const income = data.vouchers.filter((v) => v.type === "قبض" && v.branch === b.id).reduce((s, v) => s + (Number(v.amount) || 0), 0);
     const expense = data.vouchers.filter((v) => v.type === "صرف" && v.branch === b.id).reduce((s, v) => s + (Number(v.amount) || 0), 0);
-    const remaining = data.orders.filter((o) => o.branch === b.id).reduce((s, o) => { const rem = (Number(o.price) || 0) - collectedFor(o.id); return s + (rem > 0 ? rem : 0); }, 0);
+    const remaining = data.orders.filter((o) => o.branch === b.id && !o.cancelled).reduce((s, o) => { const rem = (Number(o.price) || 0) - collectedFor(o.id); return s + (rem > 0 ? rem : 0); }, 0);
     return { name: b.name, الوارد: income, المصروف: expense, المتبقي: remaining };
   });
 
@@ -1430,7 +1436,7 @@ function FinanceView({ data, update, canEdit }) {
     update({ journalEntries: entries, financeAccounts: accounts }); setJModal(null);
   };
 
-  const revenueByBranch = data.branches.map((b) => ({ name: b.name, total: data.orders.filter((o) => o.branch === b.id).reduce((s, o) => s + (Number(o.price) || 0), 0) }));
+  const revenueByBranch = data.branches.map((b) => ({ name: b.name, total: data.orders.filter((o) => o.branch === b.id && !o.cancelled).reduce((s, o) => s + (Number(o.price) || 0), 0) }));
   const expensesByBranch = data.branches.map((b) => ({ name: b.name, total: data.vouchers.filter((v) => v.branch === b.id && v.type === "صرف").reduce((s, v) => s + (Number(v.amount) || 0), 0) }));
 
   return (
@@ -1502,7 +1508,7 @@ function FinanceView({ data, update, canEdit }) {
 }
 
 // ---------- Users / System admin ----------
-function UsersView({ data, update, canEdit }) {
+function UsersView({ data, update, canEdit, currentUser }) {
   const [modal, setModal] = useState(null);
   const [branchName, setBranchName] = useState("");
   const addBranch = () => { if (branchName.trim()) { update({ branches: [...data.branches, { id: uid("br"), name: branchName.trim() }] }); setBranchName(""); } };
@@ -1523,10 +1529,24 @@ function UsersView({ data, update, canEdit }) {
         {canEdit && <div style={{ display: "flex", gap: 8 }}><TextInput placeholder="اسم فرع جديد" value={branchName} onChange={(e) => setBranchName(e.target.value)} style={{ maxWidth: 220 }} /><Btn variant="brass" onClick={addBranch}><Plus size={16} />إضافة فرع</Btn></div>}
       </Panel>
 
+      {(data.auditLog || []).length > 0 && (
+        <Panel style={{ marginBottom: 20 }}>
+          <div style={{ fontWeight: 700, marginBottom: 10 }}>سجل التدقيق (آخر العمليات الحساسة)</div>
+          <div style={{ maxHeight: 220, overflowY: "auto" }}>
+            {[...data.auditLog].reverse().slice(0, 50).map((l) => (
+              <div key={l.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px dashed ${THEME.border}`, fontSize: 12.5 }}>
+                <span><b>{l.action}</b>{l.details ? ` — ${l.details}` : ""}</span>
+                <span style={{ color: "#7A7061" }}>{l.user} — {l.at}</span>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
       <CrudSection icon={ShieldCheck} title="المستخدمون والصلاحيات" addLabel="مستخدم جديد" columns={["الاسم", "اسم الدخول", "الجوال", "الدور", "الفروع المتاحة"]} items={data.users} searchKeys={["name", "username"]}
         onAdd={canEdit ? () => setModal({ mode: "add", values: { role: ROLES[0], branches: [], phone: "", password: "", permissions: defaultPermissions(ROLES[0]) } }) : undefined}
         onEdit={canEdit ? (it) => setModal({ mode: "edit", values: it }) : undefined}
-        onDelete={canEdit ? (it) => update({ users: data.users.filter((u) => u.id !== it.id) }) : undefined}
+        onDelete={canEdit ? (it) => update({ users: data.users.filter((u) => u.id !== it.id), auditLog: [...(data.auditLog || []), logEntry(currentUser, "حذف مستخدم", `${it.name} (${it.username})`)] }) : undefined}
         renderRow={(it) => (<><td style={{ padding: "10px 14px", fontWeight: 600 }}>{it.name}</td><td style={{ padding: "10px 14px" }}>{it.username}</td><td style={{ padding: "10px 14px" }}>{it.phone || "—"}</td><td style={{ padding: "10px 14px" }}><Badge>{it.role}</Badge></td><td style={{ padding: "10px 14px", fontSize: 12.5 }}>{(it.branches || []).map((id) => data.branches.find((b) => b.id === id)?.name).filter(Boolean).join("، ") || "—"}</td></>)} />
 
       {modal && (
@@ -1592,6 +1612,7 @@ function ShopSettingsView({ data, update, canEdit }) {
   const [values, setValues] = useState(data.shopSettings || {});
   const [saved, setSaved] = useState(false);
   const fileRef = useRef(null);
+  const backupFileRef = useRef(null);
 
   const onLogoFile = (e) => {
     const file = e.target.files[0]; if (!file) return;
@@ -1600,6 +1621,30 @@ function ShopSettingsView({ data, update, canEdit }) {
     reader.readAsDataURL(file);
   };
   const save = () => { update({ shopSettings: values }); setSaved(true); setTimeout(() => setSaved(false), 2000); };
+
+  const exportBackup = () => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `نسخة-احتياطية-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+  const importBackup = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (!window.confirm("سيتم استبدال كل البيانات الحالية بمحتوى هذا الملف بالكامل. هل أنت متأكد؟")) return;
+        update(parsed);
+        alert("تم استيراد النسخة الاحتياطية بنجاح.");
+      } catch (err) { alert("تعذّرت قراءة الملف — تأكد إنه ملف نسخة احتياطية صحيح."); }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
 
   if (!canEdit) {
     return (
@@ -1613,6 +1658,15 @@ function ShopSettingsView({ data, update, canEdit }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}><Store size={22} color={THEME.brass} /><h2 style={{ margin: 0, fontFamily: "Amiri, serif", fontSize: 26, color: THEME.ink }}>بيانات المحل والمؤسسة</h2></div>
+      <Panel style={{ maxWidth: 640, marginBottom: 20 }}>
+        <div style={{ fontWeight: 700, marginBottom: 10 }}>النسخ الاحتياطي</div>
+        <div style={{ fontSize: 12.5, color: "#7A7061", marginBottom: 10 }}>حمّل نسخة كاملة من كل بيانات النظام كملف على جهازك بشكل دوري — احتياط إضافي مستقل عن قاعدة البيانات السحابية.</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn variant="brass" onClick={exportBackup}><Printer size={14} />تصدير نسخة احتياطية</Btn>
+          <Btn variant="ghost" onClick={() => backupFileRef.current.click()}><Upload size={14} />استيراد نسخة احتياطية</Btn>
+          <input ref={backupFileRef} type="file" accept="application/json" onChange={importBackup} style={{ display: "none" }} />
+        </div>
+      </Panel>
       <StorageUsagePanel data={data} />
       <Panel style={{ maxWidth: 640 }}>
         <div style={{ fontWeight: 700, marginBottom: 14 }}>الشعار واسم المحل</div>
@@ -1676,7 +1730,7 @@ function ShopSettingsView({ data, update, canEdit }) {
 
 // ---------- Reports ----------
 function ReportsView({ data }) {
-  const topCustomers = [...data.customers].map((c) => ({ ...c, count: data.orders.filter((o) => o.customerId === c.id).length, spend: data.orders.filter((o) => o.customerId === c.id).reduce((s, o) => s + (Number(o.price) || 0), 0) })).sort((a, b) => b.spend - a.spend).slice(0, 5);
+  const topCustomers = [...data.customers].map((c) => ({ ...c, count: data.orders.filter((o) => o.customerId === c.id && !o.cancelled).length, spend: data.orders.filter((o) => o.customerId === c.id && !o.cancelled).reduce((s, o) => s + (Number(o.price) || 0), 0) })).sort((a, b) => b.spend - a.spend).slice(0, 5);
   const roleCounts = {}; data.employees.forEach((e) => { roleCounts[e.role] = (roleCounts[e.role] || 0) + 1; });
   return (
     <div>
@@ -1805,6 +1859,7 @@ export default function App() {
         if (!parsed.counters) parsed.counters = { customer: 1000, order: 1000, group: 1000 };
         else if (parsed.counters.group === undefined) parsed.counters.group = 1000;
         if (!parsed.orderGroups) parsed.orderGroups = [];
+        if (!parsed.auditLog) parsed.auditLog = [];
         if (parsed.customers) { let c = parsed.counters.customer; parsed.customers = parsed.customers.map((cu) => cu.code ? cu : (c += 1, { ...cu, code: c })); parsed.counters.customer = c; }
         if (parsed.orders) { let o = parsed.counters.order; parsed.orders = parsed.orders.map((ord) => ord.orderNo ? ord : (o += 1, { ...ord, orderNo: o })); parsed.counters.order = o; }
         if (parsed.counters.purchase === undefined) parsed.counters.purchase = 1000;
@@ -1849,16 +1904,16 @@ export default function App() {
 
   const views = {
     dashboard: <Dashboard data={data} />,
-    customers: <CustomersView data={data} update={update} canEdit={canEdit} />,
-    orders: <OrdersView data={data} update={update} canEdit={canEdit} />,
+    customers: <CustomersView data={data} update={update} canEdit={canEdit} currentUser={activeUser.name} />,
+    orders: <OrdersView data={data} update={update} canEdit={canEdit} currentUser={activeUser.name} />,
     courier: <CourierView data={data} update={update} canEdit={canEdit} />,
     appointments: <AppointmentsView data={data} update={update} canEdit={canEdit} />,
     designs: <DesignsView data={data} update={update} canEdit={canEdit} />,
     invoices: <InvoicesView data={data} update={update} />,
-    employees: <EmployeesView data={data} update={update} canEdit={canEdit} />,
+    employees: <EmployeesView data={data} update={update} canEdit={canEdit} currentUser={activeUser.name} />,
     suppliers: <SuppliersView data={data} update={update} canEdit={canEdit} />,
     finance: <FinanceView data={data} update={update} canEdit={canEdit} />,
-    users: <UsersView data={data} update={update} canEdit={canEdit} />,
+    users: <UsersView data={data} update={update} canEdit={canEdit} currentUser={activeUser.name} />,
     settings: <ShopSettingsView data={data} update={update} canEdit={canEdit} />,
     reports: <ReportsView data={data} />,
   };
