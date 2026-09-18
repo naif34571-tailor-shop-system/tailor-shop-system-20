@@ -73,7 +73,8 @@ const seedData = () => ({
   counters: { customer: 1000, order: 1000, group: 1000, purchase: 1000 },
   orderGroups: [],
   auditLog: [],
-  shopSettings: { name: "مشغل الخياطة الرجالية", legalName: "", logo: "", phone: "", whatsapp: "", address: "", city: "", crNumber: "", taxNumber: "", website: "", bankName: "", iban: "", invoiceFooter: "", appTheme: "classic", readyMessageTemplate: "مرحبًا {name}، طلبك رقم #{orderNo} جاهز للاستلام من {shop}. بانتظارك! 🙏" },
+  shopSettings: { name: "مشغل الخياطة الرجالية", legalName: "", logo: "", phone: "", whatsapp: "", address: "", city: "", crNumber: "", taxNumber: "", website: "", bankName: "", iban: "", invoiceFooter: "", appTheme: "classic", readyMessageTemplate: "مرحبًا {name}، طلبك رقم #{orderNo} جاهز للاستلام من {shop}. بانتظارك! 🙏\nتقدر تتابع حالة طلبك من هنا: {trackLink}", thankYouMessageTemplate: "شكرًا لك {name} على ثقتك بنا! يسعدنا تقييم تجربتك: {reviewLink}", reminderMessageTemplate: "تذكير: عندك موعد بـ{shop} بتاريخ {date} الساعة {time}. بانتظارك! 🙏", reviewLink: "" },
+  fabricThresholds: {},
   users: [{ id: "u1", name: "مدير النظام", username: "admin", password: "admin123", phone: "", role: "مدير عام", branches: ["b1"], permissions: defaultPermissions("مدير عام") }],
   invoiceTheme: "classic",
 });
@@ -125,17 +126,18 @@ function fillTemplate(template, vars) {
 function buildWhatsAppLink(phone, message) {
   return `https://wa.me/${toWhatsAppNumber(phone)}?text=${encodeURIComponent(message)}`;
 }
-function WhatsAppNotifyButton({ order, data, update, custPhone, custName }) {
+function WhatsAppNotifyButton({ order, data, update, custPhone, custName, templateField = "readyMessageTemplate", trackField = "notifiedAt", buttonLabel = "📱 إرسال إشعار واتساب للعميل", sentLabel = "آخر إشعار مُرسل" }) {
   if (!custPhone) return <div style={{ fontSize: 12, color: "#8A8071" }}>لا يوجد رقم جوال مسجّل لهذا العميل لإرسال الإشعار.</div>;
-  const message = fillTemplate(data.shopSettings?.readyMessageTemplate, { name: custName, orderNo: order.orderNo || order.id.slice(-6), shop: data.shopSettings?.name || "" });
+  const trackLink = `${window.location.origin}${window.location.pathname}?track=${order.orderNo || order.id.slice(-6)}`;
+  const message = fillTemplate(data.shopSettings?.[templateField], { name: custName, orderNo: order.orderNo || order.id.slice(-6), shop: data.shopSettings?.name || "", trackLink, reviewLink: data.shopSettings?.reviewLink || "" });
   const send = () => {
     window.open(buildWhatsAppLink(custPhone, message), "_blank");
-    update({ orders: data.orders.map((o) => o.id === order.id ? { ...o, notifiedAt: new Date().toLocaleString("ar-SA") } : o) });
+    update({ orders: data.orders.map((o) => o.id === order.id ? { ...o, [trackField]: new Date().toLocaleString("ar-SA") } : o) });
   };
   return (
     <div style={{ marginTop: 6 }}>
-      <Btn small variant="brass" onClick={send}>📱 إرسال إشعار واتساب للعميل</Btn>
-      {order.notifiedAt && <div style={{ fontSize: 11.5, color: THEME.teal, marginTop: 4 }}>آخر إشعار مُرسل: {order.notifiedAt}</div>}
+      <Btn small variant="brass" onClick={send}>{buttonLabel}</Btn>
+      {order[trackField] && <div style={{ fontSize: 11.5, color: THEME.teal, marginTop: 4 }}>{sentLabel}: {order[trackField]}</div>}
     </div>
   );
 }
@@ -329,9 +331,29 @@ function Dashboard({ data }) {
     { label: "إجمالي الطلبات", value: data.orders.length, icon: Package },
     { label: "إجمالي المبيعات", value: `${revenue.toLocaleString()} ر.س`, icon: Wallet },
   ];
+  const stockMap = {}; data.purchases.filter((p) => p.category === "قماش").forEach((p) => { stockMap[p.item] = (stockMap[p.item] || 0) + Number(p.qty || 0); });
+  const usedMap = {}; data.orders.forEach((o) => { if (o.fabricType) usedMap[o.fabricType] = (usedMap[o.fabricType] || 0) + Number(o.fabricUsed || 0); });
+  const lowStockItems = Object.keys(stockMap).filter((item) => { const threshold = Number(data.fabricThresholds?.[item] || 0); const remaining = stockMap[item] - (usedMap[item] || 0); return threshold > 0 && remaining <= threshold; });
+  const today = new Date().toISOString().slice(0, 10);
+  const todaysAppointments = (data.appointments || []).filter((a) => a.date === today && a.status !== "ملغى");
+
   return (
     <div>
       <h2 style={{ fontFamily: "Amiri, serif", fontSize: 28, color: THEME.ink, marginTop: 0 }}>لوحة التحكم</h2>
+      {(lowStockItems.length > 0 || todaysAppointments.length > 0) && (
+        <div style={{ display: "grid", gridTemplateColumns: lowStockItems.length && todaysAppointments.length ? "1fr 1fr" : "1fr", gap: 14, marginBottom: 20 }}>
+          {lowStockItems.length > 0 && (
+            <div style={{ background: `${THEME.red}12`, border: `1px solid ${THEME.red}`, borderRadius: 8, padding: 12, fontSize: 13.5 }}>
+              <b style={{ color: THEME.red }}>⚠ مخزون قماش منخفض:</b> {lowStockItems.join("، ")}
+            </div>
+          )}
+          {todaysAppointments.length > 0 && (
+            <div style={{ background: `${THEME.teal}12`, border: `1px solid ${THEME.teal}`, borderRadius: 8, padding: 12, fontSize: 13.5 }}>
+              <b style={{ color: THEME.teal }}>📅 مواعيد اليوم:</b> {todaysAppointments.length} موعد
+            </div>
+          )}
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14, marginBottom: 20 }}>
         {kpis.map((k) => <Panel key={k.label} style={{ display: "flex", flexDirection: "column", gap: 8 }}><k.icon size={20} color={THEME.brass} /><div style={{ fontSize: 24, fontWeight: 700, color: THEME.ink }}>{k.value}</div><div style={{ fontSize: 13, color: "#7A7061" }}>{k.label}</div></Panel>)}
       </div>
@@ -390,9 +412,17 @@ function CustomersView({ data, update, canEdit, currentUser }) {
             <td style={{ padding: "10px 14px" }}><span style={{ display: "inline-flex", gap: 2 }}>{[1, 2, 3, 4, 5].map((n) => <Star key={n} size={14} fill={n <= (it.rating || 5) ? THEME.brass : "none"} color={THEME.brass} />)}</span></td></>);
         }} />
       {modal && (
-        <Modal title={modal.mode === "add" ? "إضافة عميل" : "تعديل بيانات العميل"} onClose={() => setModal(null)}>
+        <Modal title={modal.mode === "add" ? "إضافة عميل" : "تعديل بيانات العميل"} onClose={() => setModal(null)} wide>
           <FormFields fields={fields} values={modal.values} setValues={(v) => setModal({ ...modal, values: v })} />
           <Field label={`تقييم العميل: ${modal.values.rating || 5}`}><input type="range" min="1" max="5" value={modal.values.rating || 5} onChange={(e) => setModal({ ...modal, values: { ...modal.values, rating: Number(e.target.value) } })} style={{ width: "100%" }} /></Field>
+          <div style={{ fontWeight: 700, margin: "14px 0 8px" }}>القياسات الدائمة (تُستخدم تلقائيًا عند إنشاء طلب جديد له)</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
+            {data.measurementFields.map((m) => (
+              <Field key={m.key} label={m.label}>
+                <TextInput value={modal.values.measurements?.[m.key] || ""} onChange={(e) => setModal({ ...modal, values: { ...modal.values, measurements: { ...(modal.values.measurements || {}), [m.key]: e.target.value } } })} />
+              </Field>
+            ))}
+          </div>
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}><Btn variant="brass" onClick={() => save(modal.values)}>حفظ</Btn><Btn variant="ghost" onClick={() => setModal(null)}>إلغاء</Btn></div>
         </Modal>
       )}
@@ -571,6 +601,9 @@ function OrdersView({ data, update, canEdit, currentUser }) {
         patch.financeAccounts = data.financeAccounts.map((a) => a.id === accountId ? { ...a, balance: (Number(a.balance) || 0) + Number(order.deposit) } : a);
       }
     }
+    if (order.saveMeasurementsToProfile !== false && order.customerId) {
+      patch.customers = (patch.customers || data.customers).map((c) => c.id === order.customerId ? { ...c, measurements: { ...(c.measurements || {}), ...order.measurements } } : c);
+    }
     update(patch);
     setModal(null);
   };
@@ -632,6 +665,7 @@ function OrdersView({ data, update, canEdit, currentUser }) {
           <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
             <Badge color={THEME.brass}>{detail.stage}</Badge>
             {canEdit && detail.stage !== "تم التسليم" && <Btn small variant="ghost" onClick={() => advanceStage(detail)}>ترقية للمرحلة التالية<ChevronLeft size={14} /></Btn>}
+            <Btn small variant="ghost" onClick={() => { const link = `${window.location.origin}${window.location.pathname}?track=${detail.orderNo}`; navigator.clipboard?.writeText(link); alert("تم نسخ رابط التتبع:\n" + link); }}>نسخ رابط تتبع للعميل</Btn>
             <BarcodeSVG value={detail.orderNo} height={34} width={1.4} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
@@ -701,6 +735,12 @@ function OrdersView({ data, update, canEdit, currentUser }) {
                   {canEdit ? <WhatsAppNotifyButton order={detail} data={data} update={update} custPhone={data.customers.find((c) => c.id === detail.customerId)?.phone} custName={custName(detail.customerId)} /> : <div style={{ fontSize: 12, color: "#8A8071" }}>لا تملك صلاحية إرسال إشعارات.</div>}
                 </div>
               )}
+              {detail.stage === "تم التسليم" && (
+                <div style={{ marginTop: 14, background: `${THEME.brass}1a`, border: `1px solid ${THEME.brass}`, borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontWeight: 700, color: THEME.brass, marginBottom: 8 }}>✅ تم التسليم — أرسل شكر وطلب تقييم</div>
+                  {canEdit ? <WhatsAppNotifyButton order={detail} data={data} update={update} custPhone={data.customers.find((c) => c.id === detail.customerId)?.phone} custName={custName(detail.customerId)} templateField="thankYouMessageTemplate" trackField="thankedAt" buttonLabel="📱 إرسال رسالة شكر وتقييم" sentLabel="آخر رسالة شكر مُرسلة" /> : <div style={{ fontSize: 12, color: "#8A8071" }}>لا تملك صلاحية إرسال إشعارات.</div>}
+                </div>
+              )}
             </div>
           </div>
         </Modal>
@@ -709,7 +749,11 @@ function OrdersView({ data, update, canEdit, currentUser }) {
       {modal && (
         <Modal title="بيانات الطلب" onClose={() => setModal(null)} wide>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-            <Field label="العميل"><SelectInput options={data.customers.map((c) => ({ value: c.id, label: c.name }))} value={modal.customerId} onChange={(e) => setModal({ ...modal, customerId: e.target.value })} /></Field>
+            <Field label="العميل"><SelectInput options={data.customers.map((c) => ({ value: c.id, label: c.name }))} value={modal.customerId} onChange={(e) => {
+              const cust = data.customers.find((c) => c.id === e.target.value);
+              const hasSaved = cust?.measurements && Object.values(cust.measurements).some((v) => v);
+              setModal({ ...modal, customerId: e.target.value, measurements: hasSaved ? { ...modal.measurements, ...cust.measurements } : modal.measurements });
+            }} /></Field>
             <Field label="نوع الخياطة"><SelectInput options={data.orderTypes.map((t) => ({ value: t, label: t }))} value={modal.orderType} onChange={(e) => setModal({ ...modal, orderType: e.target.value })} /></Field>
             <Field label="الفرع"><SelectInput options={data.branches.map((b) => ({ value: b.id, label: b.name }))} value={modal.branch} onChange={(e) => setModal({ ...modal, branch: e.target.value })} /></Field>
           </div>
@@ -732,6 +776,10 @@ function OrdersView({ data, update, canEdit, currentUser }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
             {data.measurementFields.map((m) => <Field key={m.key} label={m.label}><TextInput value={modal.measurements[m.key] || ""} onChange={(e) => setModal({ ...modal, measurements: { ...modal.measurements, [m.key]: e.target.value } })} /></Field>)}
           </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "#6B6255", marginBottom: 10 }}>
+            <input type="checkbox" checked={modal.saveMeasurementsToProfile !== false} onChange={(e) => setModal({ ...modal, saveMeasurementsToProfile: e.target.checked })} />
+            تحديث القياسات الدائمة المحفوظة بملف العميل بهذي القيم
+          </label>
           <div style={{ fontWeight: 700, margin: "14px 0 8px" }}>التصاميم</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
             {data.designCategories.map((c) => <Field key={c.id} label={c.name}><SelectInput options={c.items.map((i) => ({ value: i.id, label: i.name }))} value={modal.designs[c.id] || ""} onChange={(e) => setModal({ ...modal, designs: { ...modal.designs, [c.id]: e.target.value } })} /></Field>)}
@@ -950,13 +998,31 @@ function AppointmentsView({ data, update, canEdit }) {
   ];
   const save = (values) => { const list = [...data.appointments]; if (modal.mode === "add") list.push({ id: uid("apt"), ...values }); else { const i = list.findIndex((a) => a.id === values.id); list[i] = values; } update({ appointments: list }); setModal(null); };
   const custName = (id) => data.customers.find((c) => c.id === id)?.name || "—";
+  const today = new Date().toISOString().slice(0, 10);
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const sendReminder = (apt) => {
+    const cust = data.customers.find((c) => c.id === apt.customerId);
+    if (!cust?.phone) { alert("لا يوجد رقم جوال مسجّل لهذا العميل."); return; }
+    const message = fillTemplate(data.shopSettings?.reminderMessageTemplate, { name: cust.name, date: apt.date, time: apt.time, shop: data.shopSettings?.name || "" });
+    window.open(buildWhatsAppLink(cust.phone, message), "_blank");
+  };
   return (
     <>
-      <CrudSection icon={CalendarClock} title="مواعيد القياس والبروفة" addLabel="موعد جديد" columns={["العميل", "النوع", "التاريخ", "الوقت", "الفرع", "الحالة"]} items={data.appointments} searchKeys={[]}
+      <CrudSection icon={CalendarClock} title="مواعيد القياس والبروفة" addLabel="موعد جديد" columns={["العميل", "النوع", "التاريخ", "الوقت", "الفرع", "الحالة", ""]} items={data.appointments} searchKeys={[]}
         onAdd={canEdit ? () => data.customers.length ? setModal({ mode: "add", values: { type: types[0], status: statuses[0], branch: data.branches[0]?.id } }) : alert("أضف عميلاً أولاً") : undefined}
         onEdit={canEdit ? (it) => setModal({ mode: "edit", values: it }) : undefined}
         onDelete={canEdit ? (it) => update({ appointments: data.appointments.filter((a) => a.id !== it.id) }) : undefined}
-        renderRow={(it) => (<><td style={{ padding: "10px 14px", fontWeight: 600 }}>{custName(it.customerId)}</td><td style={{ padding: "10px 14px" }}>{it.type}</td><td style={{ padding: "10px 14px" }}>{it.date}</td><td style={{ padding: "10px 14px" }}>{it.time}</td><td style={{ padding: "10px 14px" }}>{data.branches.find((b) => b.id === it.branch)?.name}</td><td style={{ padding: "10px 14px" }}><Badge color={it.status === "تم" ? THEME.teal : it.status === "ملغى" ? THEME.red : THEME.brass}>{it.status}</Badge></td></>)} />
+        renderRow={(it) => (
+          <>
+            <td style={{ padding: "10px 14px", fontWeight: 600 }}>{custName(it.customerId)}</td>
+            <td style={{ padding: "10px 14px" }}>{it.type}</td>
+            <td style={{ padding: "10px 14px" }}>{it.date} {it.date === today && <Badge color={THEME.teal}>اليوم</Badge>}{it.date === tomorrow && <Badge color={THEME.brass}>غدًا</Badge>}</td>
+            <td style={{ padding: "10px 14px" }}>{it.time}</td>
+            <td style={{ padding: "10px 14px" }}>{data.branches.find((b) => b.id === it.branch)?.name}</td>
+            <td style={{ padding: "10px 14px" }}><Badge color={it.status === "تم" ? THEME.teal : it.status === "ملغى" ? THEME.red : THEME.brass}>{it.status}</Badge></td>
+            <td style={{ padding: "10px 14px" }}>{it.status === "مجدول" && <Btn small variant="ghost" onClick={() => sendReminder(it)}>📱 تذكير</Btn>}</td>
+          </>
+        )} />
       {modal && (
         <Modal title={modal.mode === "add" ? "إضافة موعد" : "تعديل موعد"} onClose={() => setModal(null)}>
           <FormFields fields={fields} values={modal.values} setValues={(v) => setModal({ ...modal, values: v })} />
@@ -1247,11 +1313,24 @@ function SuppliersView({ data, update, canEdit }) {
       <div style={{ height: 24 }} />
       <Panel style={{ marginBottom: 20 }}>
         <div style={{ fontWeight: 700, marginBottom: 10 }}>مخزون الأقمشة الحالي</div>
-        {stockRows.length === 0 ? <EmptyState text="سجّل مشتريات قماش لعرض المخزون" /> : stockRows.map((r) => (
-          <div key={r.item} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px dashed ${THEME.border}`, fontSize: 13.5 }}>
-            <span>{r.item}</span><span>مُشترى: {r.purchased} م — مستخدم: {r.used} م — <b>المتبقي: {r.remaining} م</b></span>
-          </div>
-        ))}
+        {stockRows.length === 0 ? <EmptyState text="سجّل مشتريات قماش لعرض المخزون" /> : stockRows.map((r) => {
+          const threshold = Number(data.fabricThresholds?.[r.item] || 0);
+          const isLow = threshold > 0 && r.remaining <= threshold;
+          return (
+            <div key={r.item} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px dashed ${THEME.border}`, fontSize: 13.5, background: isLow ? `${THEME.red}0f` : "transparent" }}>
+              <span>{r.item} {isLow && <Badge color={THEME.red}>منخفض ⚠</Badge>}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                مُشترى: {r.purchased} م — مستخدم: {r.used} م — <b style={{ color: isLow ? THEME.red : "inherit" }}>المتبقي: {r.remaining} م</b>
+                {canEdit && (
+                  <span style={{ fontSize: 11.5, color: "#8A8071", display: "flex", alignItems: "center", gap: 4 }}>
+                    حد التنبيه:
+                    <input type="number" defaultValue={data.fabricThresholds?.[r.item] || ""} onBlur={(e) => update({ fabricThresholds: { ...(data.fabricThresholds || {}), [r.item]: e.target.value } })} style={{ width: 55, padding: "3px 5px", border: `1px solid ${THEME.border}`, borderRadius: 4 }} />
+                  </span>
+                )}
+              </span>
+            </div>
+          );
+        })}
       </Panel>
 
       <CrudSection icon={Truck} title="سجل المشتريات" addLabel="عملية شراء" columns={["الرقم", "المورد", "التصنيف", "الصنف", "الكمية", "التكلفة", "التاريخ", "مرفق"]} items={data.purchases} searchKeys={["item", "purchaseNo"]}
@@ -1436,18 +1515,33 @@ function FinanceView({ data, update, canEdit }) {
     update({ journalEntries: entries, financeAccounts: accounts }); setJModal(null);
   };
 
-  const revenueByBranch = data.branches.map((b) => ({ name: b.name, total: data.orders.filter((o) => o.branch === b.id && !o.cancelled).reduce((s, o) => s + (Number(o.price) || 0), 0) }));
-  const expensesByBranch = data.branches.map((b) => ({ name: b.name, total: data.vouchers.filter((v) => v.branch === b.id && v.type === "صرف").reduce((s, v) => s + (Number(v.amount) || 0), 0) }));
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const inRange = (d) => { if (!d) return !dateFrom && !dateTo; if (dateFrom && d < dateFrom) return false; if (dateTo && d > dateTo) return false; return true; };
+  const filteredOrders = data.orders.filter((o) => inRange(o.createdAt));
+  const filteredVouchers = data.vouchers.filter((v) => inRange(v.date));
+  const filteredData = { ...data, orders: filteredOrders, vouchers: filteredVouchers };
+
+  const revenueByBranch = data.branches.map((b) => ({ name: b.name, total: filteredOrders.filter((o) => o.branch === b.id && !o.cancelled).reduce((s, o) => s + (Number(o.price) || 0), 0) }));
+  const expensesByBranch = data.branches.map((b) => ({ name: b.name, total: filteredVouchers.filter((v) => v.branch === b.id && v.type === "صرف").reduce((s, v) => s + (Number(v.amount) || 0), 0) }));
 
   return (
     <div>
       <h2 style={{ fontFamily: "Amiri, serif", fontSize: 28, color: THEME.ink, marginTop: 0 }}>الإدارة المالية</h2>
-      <FinanceCharts data={data} />
+      <Panel style={{ marginBottom: 16, maxWidth: 480 }}>
+        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13.5 }}>فلترة التقارير بمدى تاريخي (لا يؤثر على أرصدة الحسابات الفعلية)</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "end" }}>
+          <Field label="من تاريخ"><TextInput type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></Field>
+          <Field label="إلى تاريخ"><TextInput type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></Field>
+          {(dateFrom || dateTo) && <Btn small variant="ghost" onClick={() => { setDateFrom(""); setDateTo(""); }} style={{ marginBottom: 12 }}>مسح الفلتر</Btn>}
+        </div>
+      </Panel>
+      <FinanceCharts data={filteredData} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 14, marginBottom: 20 }}>
         {data.financeAccounts.map((a) => <Panel key={a.id}><div style={{ fontSize: 13, color: "#7A7061" }}>{a.name}</div><div style={{ fontSize: 22, fontWeight: 700 }}>{a.balance.toLocaleString()} ر.س</div></Panel>)}
       </div>
       <Panel style={{ marginBottom: 20 }}>
-        <div style={{ fontWeight: 700, marginBottom: 10 }}>الأرباح والخسائر حسب الفرع</div>
+        <div style={{ fontWeight: 700, marginBottom: 10 }}>الأرباح والخسائر حسب الفرع {(dateFrom || dateTo) && <span style={{ fontSize: 11.5, color: THEME.teal, fontWeight: 400 }}>(بالمدى المحدد)</span>}</div>
         {data.branches.map((b) => {
           const rev = revenueByBranch.find((r) => r.name === b.name)?.total || 0;
           const exp = expensesByBranch.find((r) => r.name === b.name)?.total || 0;
@@ -1701,8 +1795,17 @@ function ShopSettingsView({ data, update, canEdit }) {
         <Field label="ملاحظة تظهر أسفل فاتورة العميل (اختياري)"><textarea rows={2} value={values.invoiceFooter || ""} onChange={(e) => setValues({ ...values, invoiceFooter: e.target.value })} style={{ ...inputStyle, resize: "vertical" }} /></Field>
 
         <div style={{ fontWeight: 700, margin: "16px 0 6px" }}>نص إشعار واتساب عند جاهزية الطلب</div>
-        <div style={{ fontSize: 11.5, color: "#8A8071", marginBottom: 6 }}>استخدم {"{name}"} لاسم العميل، {"{orderNo}"} لرقم الطلب، {"{shop}"} لاسم المحل — تُستبدل تلقائيًا وقت الإرسال.</div>
+        <div style={{ fontSize: 11.5, color: "#8A8071", marginBottom: 6 }}>استخدم {"{name}"} لاسم العميل، {"{orderNo}"} لرقم الطلب، {"{shop}"} لاسم المحل، {"{trackLink}"} لرابط تتبع الطلب — تُستبدل تلقائيًا وقت الإرسال.</div>
         <Field label=""><textarea rows={3} value={values.readyMessageTemplate || ""} onChange={(e) => setValues({ ...values, readyMessageTemplate: e.target.value })} style={{ ...inputStyle, resize: "vertical" }} /></Field>
+
+        <div style={{ fontWeight: 700, margin: "16px 0 6px" }}>نص رسالة الشكر وطلب التقييم (تُرسل بعد التسليم)</div>
+        <div style={{ fontSize: 11.5, color: "#8A8071", marginBottom: 6 }}>استخدم {"{name}"} و{"{reviewLink}"} (رابط تقييمك بجوجل مثلاً، حدده بالأسفل).</div>
+        <Field label=""><textarea rows={2} value={values.thankYouMessageTemplate || ""} onChange={(e) => setValues({ ...values, thankYouMessageTemplate: e.target.value })} style={{ ...inputStyle, resize: "vertical" }} /></Field>
+        <Field label="رابط التقييم (اختياري — رابط تقييم Google للمحل)"><TextInput value={values.reviewLink || ""} onChange={(e) => setValues({ ...values, reviewLink: e.target.value })} placeholder="https://g.page/r/..." /></Field>
+
+        <div style={{ fontWeight: 700, margin: "16px 0 6px" }}>نص تذكير المواعيد</div>
+        <div style={{ fontSize: 11.5, color: "#8A8071", marginBottom: 6 }}>استخدم {"{name}"} و{"{date}"} و{"{time}"} و{"{shop}"}.</div>
+        <Field label=""><textarea rows={2} value={values.reminderMessageTemplate || ""} onChange={(e) => setValues({ ...values, reminderMessageTemplate: e.target.value })} style={{ ...inputStyle, resize: "vertical" }} /></Field>
 
         <div style={{ fontWeight: 700, margin: "16px 0 10px" }}>ثيم ألوان النظام</div>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
@@ -1745,6 +1848,48 @@ function ReportsView({ data }) {
 }
 
 // ---------- Login ----------
+// ---------- Public order tracking (no login required) ----------
+function TrackOrderPage({ data, orderNo }) {
+  const order = data.orders.find((o) => String(o.orderNo) === String(orderNo));
+  const stageIdx = order ? data.orderStages.indexOf(order.stage) : -1;
+  return (
+    <div dir="rtl" style={{ minHeight: "100vh", background: THEME.parchment, fontFamily: "Tajawal, sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&family=Amiri:wght@700&display=swap');`}</style>
+      <div style={{ width: 420, maxWidth: "100%", background: THEME.panel, border: `1px solid ${THEME.border}`, borderTop: `3px solid ${THEME.brass}`, borderRadius: 10, padding: 26 }}>
+        <div style={{ textAlign: "center", marginBottom: 14 }}>
+          {data.shopSettings?.logo && <img src={data.shopSettings.logo} alt="" style={{ width: 46, height: 46, objectFit: "cover", borderRadius: 8, marginBottom: 8 }} />}
+          <div style={{ fontFamily: "Amiri, serif", fontSize: 22, color: THEME.ink }}>{data.shopSettings?.name || "مشغل الخياطة"}</div>
+          <div style={{ fontSize: 12.5, color: "#7A7061" }}>تتبع حالة الطلب</div>
+        </div>
+        {!order ? (
+          <div style={{ textAlign: "center", color: THEME.red, padding: 20 }}>لم يتم العثور على طلب بهذا الرقم.</div>
+        ) : (
+          <>
+            <div style={{ textAlign: "center", fontWeight: 700, fontSize: 17, marginBottom: 4, color: THEME.brass }}>طلب #{order.orderNo}</div>
+            {order.cancelled ? (
+              <div style={{ textAlign: "center", color: THEME.red, fontWeight: 700, padding: "10px 0" }}>هذا الطلب مُلغى</div>
+            ) : (
+              <>
+                <div style={{ textAlign: "center", fontSize: 13, color: "#7A7061", marginBottom: 18 }}>موعد التسليم المتوقع: {order.deliveryDate || "غير محدد"}</div>
+                <div>
+                  {data.orderStages.map((s, i) => (
+                    <div key={s} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                      <div style={{ width: 22, height: 22, borderRadius: "50%", background: i <= stageIdx ? THEME.teal : "#EFE7D6", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        {i <= stageIdx && <Check size={13} color="#fff" />}
+                      </div>
+                      <div style={{ fontSize: 13.5, fontWeight: i === stageIdx ? 700 : 400, color: i <= stageIdx ? THEME.ink : "#B9AF9C" }}>{s}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function LoginScreen({ data, update, onLogin }) {
   const [mode, setMode] = useState("login"); // login | forgot | reset
   const [username, setUsername] = useState("");
@@ -1853,7 +1998,14 @@ export default function App() {
         if (!parsed.journalEntries) parsed.journalEntries = [];
         if (!parsed.appointments) parsed.appointments = [];
         if (!parsed.shopSettings) parsed.shopSettings = seedData().shopSettings;
-        else if (!parsed.shopSettings.readyMessageTemplate) parsed.shopSettings.readyMessageTemplate = seedData().shopSettings.readyMessageTemplate;
+        else {
+          const seedSettings = seedData().shopSettings;
+          if (!parsed.shopSettings.readyMessageTemplate) parsed.shopSettings.readyMessageTemplate = seedSettings.readyMessageTemplate;
+          if (!parsed.shopSettings.thankYouMessageTemplate) parsed.shopSettings.thankYouMessageTemplate = seedSettings.thankYouMessageTemplate;
+          if (!parsed.shopSettings.reminderMessageTemplate) parsed.shopSettings.reminderMessageTemplate = seedSettings.reminderMessageTemplate;
+          if (parsed.shopSettings.reviewLink === undefined) parsed.shopSettings.reviewLink = "";
+        }
+        if (!parsed.fabricThresholds) parsed.fabricThresholds = {};
         if (!parsed.embroideryTypes) parsed.embroideryTypes = seedData().embroideryTypes;
         else if (parsed.embroideryTypes.length && typeof parsed.embroideryTypes[0] === "string") parsed.embroideryTypes = parsed.embroideryTypes.map((n) => ({ id: uid("emb"), name: n }));
         if (!parsed.counters) parsed.counters = { customer: 1000, order: 1000, group: 1000 };
@@ -1894,6 +2046,9 @@ export default function App() {
 
   if (!data || !sessionLoaded) return <div style={{ padding: 40, fontFamily: "Tajawal, sans-serif" }}>جارِ التحميل...</div>;
   applyTheme(data.shopSettings?.appTheme);
+
+  const trackOrderNo = new URLSearchParams(window.location.search).get("track");
+  if (trackOrderNo) return <TrackOrderPage data={data} orderNo={trackOrderNo} />;
 
   const activeUser = data.users.find((u) => u.id === sessionUserId);
   if (!activeUser) return <LoginScreen data={data} update={update} onLogin={handleLogin} />;
