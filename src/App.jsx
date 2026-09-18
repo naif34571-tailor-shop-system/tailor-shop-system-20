@@ -553,6 +553,7 @@ function emptyOrder(data) {
     shelf: "", column: "", notes: "", fabricType: "", fabricUsed: "", paymentMethod: "نقدي",
     assignedTailorId: "", discount: "", couponCode: "", alterationsRemaining: 2, alterationLog: [],
     embroideryType: "بدون", embroideryNotes: "", stageAssignments: {}, groupId: "",
+    externalDeliveryProvider: "", externalTrackingNumber: "",
     createdAt: new Date().toISOString().slice(0, 10), stageLog: [],
   };
 }
@@ -689,6 +690,7 @@ function OrdersView({ data, update, canEdit, currentUser }) {
               </div>
               <div style={{ marginTop: 14, fontSize: 13.5 }}>
                 <div>السعر: {detail.price || 0} ر.س — العربون: {detail.deposit || 0} ر.س — الدفع: {detail.paymentMethod}</div>
+                {detail.externalDeliveryProvider && <div style={{ marginTop: 4 }}>توصيل خارجي: {detail.externalDeliveryProvider}{detail.externalTrackingNumber ? ` — رقم التتبع: ${detail.externalTrackingNumber}` : ""}</div>}
               </div>
               <div style={{ fontWeight: 700, margin: "12px 0 6px" }}>الدفعات المالية المسجّلة</div>
               {(() => {
@@ -809,6 +811,8 @@ function OrdersView({ data, update, canEdit, currentUser }) {
             <Field label="الخياط المسؤول"><SelectInput options={[{ value: "", label: "غير محدد" }, ...tailorOptions.map((t) => ({ value: t.id, label: t.name }))]} value={modal.assignedTailorId || ""} onChange={(e) => setModal({ ...modal, assignedTailorId: e.target.value })} /></Field>
             <Field label="الخصم (ر.س)"><TextInput type="number" value={modal.discount || ""} onChange={(e) => setModal({ ...modal, discount: e.target.value })} /></Field>
             <Field label="كود الكوبون"><TextInput value={modal.couponCode || ""} onChange={(e) => setModal({ ...modal, couponCode: e.target.value })} /></Field>
+            <Field label="شركة توصيل خارجية (اختياري)"><TextInput placeholder="مثال: مرسول" value={modal.externalDeliveryProvider || ""} onChange={(e) => setModal({ ...modal, externalDeliveryProvider: e.target.value })} /></Field>
+            <Field label="رقم تتبع التوصيل الخارجي"><TextInput value={modal.externalTrackingNumber || ""} onChange={(e) => setModal({ ...modal, externalTrackingNumber: e.target.value })} /></Field>
           </div>
           {!data.orders.find((o) => o.id === modal.id) && <div style={{ fontSize: 11.5, color: "#7A7061", marginTop: -8, marginBottom: 8 }}>العربون سيُسجَّل تلقائيًا بالمالية عند الحفظ (لغير التقسيط). لتسجيل دفعات إضافية لاحقًا استخدم "تسجيل دفعة" من تفاصيل الطلب.</div>}
           <Field label="ملاحظات"><textarea rows={2} value={modal.notes} onChange={(e) => setModal({ ...modal, notes: e.target.value })} style={{ ...inputStyle, resize: "vertical" }} /></Field>
@@ -1835,10 +1839,39 @@ function ShopSettingsView({ data, update, canEdit }) {
 function ReportsView({ data }) {
   const topCustomers = [...data.customers].map((c) => ({ ...c, count: data.orders.filter((o) => o.customerId === c.id && !o.cancelled).length, spend: data.orders.filter((o) => o.customerId === c.id && !o.cancelled).reduce((s, o) => s + (Number(o.price) || 0), 0) })).sort((a, b) => b.spend - a.spend).slice(0, 5);
   const roleCounts = {}; data.employees.forEach((e) => { roleCounts[e.role] = (roleCounts[e.role] || 0) + 1; });
+
+  // Last 12 months of order volume — helps spot seasonal peaks (Ramadan/Eid) year over year.
+  const months = [];
+  const now = new Date();
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({ key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, label: d.toLocaleDateString("ar-SA", { month: "short", year: "2-digit" }) });
+  }
+  const seasonalData = months.map((m) => {
+    const monthOrders = data.orders.filter((o) => !o.cancelled && (o.createdAt || "").startsWith(m.key));
+    return { name: m.label, الطلبات: monthOrders.length, "المبيعات (ر.س)": monthOrders.reduce((s, o) => s + (Number(o.price) || 0), 0) };
+  });
+
   return (
     <div>
       <h2 style={{ fontFamily: "Amiri, serif", fontSize: 28, color: THEME.ink, marginTop: 0 }}>التقارير</h2>
       <FinanceCharts data={data} />
+      <Panel style={{ marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>الاتجاه الموسمي — آخر 12 شهر</div>
+        <div style={{ fontSize: 11.5, color: "#8A8071", marginBottom: 10 }}>يساعدك تتوقع فترات الذروة (رمضان، العيد) وتستعد لها بموظفين ومخزون أكثر مسبقًا.</div>
+        <div style={{ width: "100%", height: 260 }}>
+          <ResponsiveContainer>
+            <BarChart data={seasonalData}>
+              <CartesianGrid strokeDasharray="3 3" stroke={THEME.border} />
+              <XAxis dataKey="name" fontSize={11} />
+              <YAxis fontSize={11} />
+              <Tooltip />
+              <Legend />
+              <Bar dataKey="الطلبات" fill={THEME.brass} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </Panel>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Panel><div style={{ fontWeight: 700, marginBottom: 10 }}>أفضل 5 عملاء (حسب الإنفاق)</div>{topCustomers.length === 0 ? <EmptyState text="لا توجد بيانات" /> : topCustomers.map((c) => <div key={c.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px dashed ${THEME.border}`, fontSize: 13.5 }}><span>{c.name}</span><span>{c.spend.toLocaleString()} ر.س — {c.count} طلب</span></div>)}</Panel>
         <Panel><div style={{ fontWeight: 700, marginBottom: 10 }}>الموظفون حسب الدور</div>{Object.keys(roleCounts).length === 0 ? <EmptyState text="لا توجد بيانات" /> : Object.entries(roleCounts).map(([role, count]) => <div key={role} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px dashed ${THEME.border}`, fontSize: 13.5 }}><span>{role}</span><span>{count}</span></div>)}</Panel>
@@ -1847,7 +1880,6 @@ function ReportsView({ data }) {
   );
 }
 
-// ---------- Login ----------
 // ---------- Public order tracking (no login required) ----------
 function TrackOrderPage({ data, orderNo }) {
   const order = data.orders.find((o) => String(o.orderNo) === String(orderNo));
@@ -1990,6 +2022,23 @@ export default function App() {
   const [tab, setTab] = useState("dashboard");
   const [sessionUserId, setSessionUserId] = useState(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
+  const [isOnline, setIsOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
+  const [hasPendingSync, setHasPendingSync] = useState(false);
+  const dataForSyncRef = useRef(null);
+
+  React.useEffect(() => {
+    const goOnline = async () => {
+      setIsOnline(true);
+      if (dataForSyncRef.current) {
+        try { await window.storage.set(STORAGE_KEY, JSON.stringify(dataForSyncRef.current), false); setHasPendingSync(false); }
+        catch (e) { /* still failing — stays pending, will retry on next reconnect or next edit */ }
+      }
+    };
+    const goOffline = () => setIsOnline(false);
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
+  }, []);
 
   React.useEffect(() => {
     (async () => {
@@ -2029,8 +2078,11 @@ export default function App() {
   const update = async (patch) => {
     const next = { ...data, ...patch };
     setData(next);
-    try { await window.storage.set(STORAGE_KEY, JSON.stringify(next), false); }
+    dataForSyncRef.current = next;
+    if (typeof navigator !== "undefined" && !navigator.onLine) { setHasPendingSync(true); return; }
+    try { await window.storage.set(STORAGE_KEY, JSON.stringify(next), false); setHasPendingSync(false); }
     catch (e) {
+      if (typeof navigator !== "undefined" && !navigator.onLine) { setHasPendingSync(true); return; }
       alert("⚠ فشل حفظ آخر تغيير بشكل دائم!\nتفاصيل الخطأ: " + (e?.message || String(e)) + "\nالتغيير ظاهر لك الآن مؤقتًا لكن قد يختفي عند إعادة تحميل الصفحة.");
     }
   };
@@ -2091,6 +2143,11 @@ export default function App() {
         </div>
         <div style={{ flex: 1, padding: "20px 32px", overflowX: "hidden" }}>
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14, alignItems: "center", gap: 12 }}>
+            {!isOnline ? (
+              <span style={{ fontSize: 12, background: `${THEME.red}1a`, color: THEME.red, padding: "4px 10px", borderRadius: 20 }}>🔴 غير متصل بالإنترنت — التغييرات محفوظة مؤقتًا وستُزامن تلقائيًا عند عودة الاتصال</span>
+            ) : hasPendingSync ? (
+              <span style={{ fontSize: 12, background: "#C9A2271a", color: "#8A6D1F", padding: "4px 10px", borderRadius: 20 }}>🟡 جاري مزامنة تغييرات معلّقة...</span>
+            ) : null}
             <span style={{ fontSize: 12.5, color: "#7A7061" }}>مسجّل الدخول: <b>{activeUser.name}</b> ({activeUser.role})</span>
             <Btn small variant="ghost" onClick={handleLogout}>تسجيل الخروج</Btn>
           </div>
